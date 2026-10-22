@@ -70,18 +70,29 @@ la pédale d'expression devient un « volume de reverb » au pied.
 Le moteur est dans `Source/HolyverbDSP.h` (sans dépendance JUCE) et un banc de test
 hors DAW est fourni dans `tests/test_dsp.cpp` (mesure des T60, niveaux, stabilité, rendus WAV).
 
-## Obtenir le VST3 via GitHub
+## Obtenir le VST3 via GitHub (Windows et macOS)
 
 Pousser le dossier sur GitHub : le workflow `.github/workflows/build.yml` compile automatiquement
-le VST3 sous Windows. Onglet **Actions** → dernier build → **Artifacts** → `Holyverb-VST3-Windows`.
-Dézipper et copier `Holyverb.vst3` dans `C:\Program Files\Common Files\VST3\`.
+le VST3 pour Windows et pour macOS. Onglet **Actions** → dernier build → **Artifacts** :
+
+- `Holyverb-VST3-Windows` : dézipper et copier `Holyverb.vst3` dans `C:\Program Files\Common Files\VST3\`.
+- `Holyverb-VST3-macOS` : dézipper (il contient `Holyverb-VST3-macOS.zip`), dézipper encore, puis copier
+  `Holyverb.vst3` dans `~/Library/Audio/Plug-Ins/VST3/`. Binaire universel (Apple Silicon et Intel), macOS 10.13+.
+
+Sur Mac, le plugin n'est pas notarié par Apple : au premier lancement, ouvrir le Terminal et taper
+
+```
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/Holyverb.vst3
+```
+
+puis relancer le scan des plugins dans Reaper.
 
 ## Compilation locale (Windows 11)
 
 Prérequis : Visual Studio 2022 (C++), CMake ≥ 3.22, Git.
 
 ```bat
-cmake -B build -G "Visual Studio 17 2022"
+cmake -B build -A x64
 cmake --build build --config Release
 ```
 
