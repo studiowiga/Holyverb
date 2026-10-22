@@ -77,6 +77,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void parentHierarchyChanged() override;
     void mouseDown (const juce::MouseEvent&) override;
 
     // Repère de référence (100 %) ; taille par défaut = taille minimale (identique à Echoflex)
@@ -86,6 +87,7 @@ public:
 
 private:
     void timerCallback() override;
+    void useSoftwareRenderer();
     void showContextMenu();
     void setScaledHeight (int h);
     void showStatus (const juce::String& text);

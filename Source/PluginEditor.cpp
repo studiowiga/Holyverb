@@ -314,6 +314,28 @@ float HolyverbAudioProcessorEditor::physicalScale() const
 }
 
 //==============================================================================
+// Anti-gel de la fenêtre (Windows) : JUCE 8 dessine par défaut avec Direct2D (carte graphique).
+// Avec certains pilotes (Intel notamment) la fenêtre du plugin cesse de se rafraîchir alors que
+// le DAW continue de tourner. Le moteur logiciel est stable partout et largement assez rapide ici.
+void HolyverbAudioProcessorEditor::useSoftwareRenderer()
+{
+   #if JUCE_WINDOWS
+    if (auto* peer = getPeer())
+    {
+        int sw = peer->getAvailableRenderingEngines().indexOf ("Software Renderer");
+        if (sw < 0) sw = 0;
+        if (peer->getCurrentRenderingEngine() != sw)
+            peer->setCurrentRenderingEngine (sw);
+    }
+   #endif
+}
+
+void HolyverbAudioProcessorEditor::parentHierarchyChanged()
+{
+    useSoftwareRenderer();
+}
+
+//==============================================================================
 // Caches d'affichage : fond et images déjà à la bonne taille
 //==============================================================================
 void HolyverbAudioProcessorEditor::rebuildCaches (float sc)
@@ -380,6 +402,8 @@ void HolyverbAudioProcessorEditor::showStatus (const String& text)
 
 void HolyverbAudioProcessorEditor::timerCallback()
 {
+    useSoftwareRenderer();   // au cas où la fenêtre a été recréée par l'hôte (changement d'écran, d'échelle…)
+
     const double now = Time::getMillisecondCounterHiRes();
 
     if (resizeSettle > 0 && --resizeSettle == 0)
@@ -602,7 +626,7 @@ void HolyverbAudioProcessorEditor::showContextMenu()
     menu.addItem (51, "Tails (reverb rings out)",  true, raw (ParamID::trails) > 0.5f);
     menu.addItem (52, "Reset expression",          raw (ParamID::expression) > 0.001f);
     menu.addSeparator();
-    menu.addItem (999, "Holyverb v1.2.0 - STUDIO WIGA", false);
+    menu.addItem (999, "Holyverb v1.2.1 - STUDIO WIGA", false);
 
     menu.showMenuAsync (PopupMenu::Options().withTargetComponent (this),
         [safe = Component::SafePointer<HolyverbAudioProcessorEditor> (this)] (int r)
