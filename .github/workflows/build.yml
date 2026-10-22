@@ -11,8 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure (Visual Studio 2022, x64)
-        run: cmake -B build -G "Visual Studio 17 2022" -A x64
+      # Pas de version de Visual Studio imposée : CMake prend celle installée sur la machine GitHub
+      - name: Configure (Visual Studio, x64)
+        run: cmake -B build -A x64
 
       - name: Build Release
         run: cmake --build build --config Release --parallel
