@@ -1,0 +1,11 @@
+STUDIO WIGA - kit graphique commun aux pédales VST3
+
+logo_studio_wiga_blanc.png      Logo horizontal blanc, fond transparent (1406 x 157).
+                                A placer sous le footswitch, largeur ~118 px dans le repère 760 x 958.
+embase_jack_source.png          Embase jack d'origine (28 x 133), telle que fournie.
+embase_jack_gauche_OUT.png      Embase détourée (fond transparent), côté gauche = OUT.
+embase_jack_droite_IN.png       Même embase en miroir, côté droit = IN.
+
+Repères utilisés sur Holyverb (fond 1520 x 1916 = 2 x 760 x 958) :
+- embase collée à la tranche du boîtier, hauteur ~104 px dans le fond x2, centrée à mi-hauteur du boîtier ;
+- inscriptions IN / OUT imprimées sur la façade, à côté de chaque embase.
