@@ -277,6 +277,7 @@ HolyverbAudioProcessorEditor::HolyverbAudioProcessorEditor (HolyverbAudioProcess
     setResizeLimits (defaultW, defaultH, baseW * 3 / 2, baseH * 3 / 2);
     if (auto* cons = getConstrainer())
         cons->setFixedAspectRatio ((double) baseW / (double) baseH);
+    setOpaque (true);                      // anti-gel : l'hôte ne redessine jamais ce qui est derrière la fenêtre
     setSize (defaultW, defaultH);
     rebuildCaches();
 
@@ -317,10 +318,21 @@ float HolyverbAudioProcessorEditor::physicalScale() const
 // Anti-gel de la fenêtre (Windows) : JUCE 8 dessine par défaut avec Direct2D (carte graphique).
 // Avec certains pilotes (Intel notamment) la fenêtre du plugin cesse de se rafraîchir alors que
 // le DAW continue de tourner. Le moteur logiciel est stable partout et largement assez rapide ici.
+//==============================================================================
+// Anti-gel v2 (Studio Wiga) :
+//  1. moteur de rendu logiciel forcé sur Windows (Direct2D peut figer la fenêtre dans certains hôtes),
+//     appliqué à chaque nouvelle fenêtre hôte (peer) et revérifié toutes les secondes, jamais en boucle ;
+//  2. aucun calcul lourd dans paint() : les caches d'images sont reconstruits par le timer seulement,
+//     après stabilisation de la taille ou quand l'échelle d'affichage change (au plus toutes les 250 ms) ;
+//  3. chien de garde : si un redessin demandé n'est pas arrivé au bout de 1,5 s alors que la fenêtre est
+//     visible, le moteur de rendu est réappliqué et toute la fenêtre est redessinée ;
+//  4. côté audio : aucun appel à l'hôte ni allocation depuis le thread audio (voir PluginProcessor).
 void HolyverbAudioProcessorEditor::useSoftwareRenderer()
 {
+    auto* peer = getPeer();
+    if (peer != lastPeer) { lastPeer = peer; repaint(); }
    #if JUCE_WINDOWS
-    if (auto* peer = getPeer())
+    if (peer != nullptr)
     {
         int sw = peer->getAvailableRenderingEngines().indexOf ("Software Renderer");
         if (sw < 0) sw = 0;
@@ -333,6 +345,18 @@ void HolyverbAudioProcessorEditor::useSoftwareRenderer()
 void HolyverbAudioProcessorEditor::parentHierarchyChanged()
 {
     useSoftwareRenderer();
+}
+
+void HolyverbAudioProcessorEditor::visibilityChanged()
+{
+    useSoftwareRenderer();
+    if (isShowing()) repaint();
+}
+
+void HolyverbAudioProcessorEditor::askRepaint (Rectangle<int> r)
+{
+    if (repaintAskedMs <= 0.0) repaintAskedMs = Time::getMillisecondCounterHiRes();
+    repaint (r);
 }
 
 //==============================================================================
@@ -358,11 +382,13 @@ void HolyverbAudioProcessorEditor::rebuildCaches (float sc)
     modeLnf.prepareScaled (roundToInt (modeHalf * 2.0f * s * sc));
     preSwitch.prepareScaled (roundToInt (swHalf * 2.0f * s * sc));
     tailsSwitch.prepareScaled (roundToInt (swHalf * 2.0f * s * sc));
-    repaint();
+    askRepaint (getLocalBounds());
 }
 
 void HolyverbAudioProcessorEditor::resized()
 {
+    // anti-gel : jamais de setSize ici (mise à l'échelle Windows 125 / 150 % : tolérance de quelques px) ;
+    // les limites du constrainer suffisent, sinon boucle de redimensionnement avec l'hôte
     auto place = [&] (Component& c, Point<float> p, float half)
     {
         c.setBounds (scaled ({ p.x - half, p.y - half, half * 2.0f, half * 2.0f }));
@@ -402,12 +428,29 @@ void HolyverbAudioProcessorEditor::showStatus (const String& text)
 
 void HolyverbAudioProcessorEditor::timerCallback()
 {
-    useSoftwareRenderer();   // au cas où la fenêtre a été recréée par l'hôte (changement d'écran, d'échelle…)
-
     const double now = Time::getMillisecondCounterHiRes();
+    // au cas où la fenêtre a été recréée par l'hôte (changement d'écran, d'échelle…) ; sinon au plus 1 fois par seconde
+    if (getPeer() != lastPeer || now - lastRendererCheckMs > 1000.0) { lastRendererCheckMs = now; useSoftwareRenderer(); }
 
+    // caches : reconstruits ici seulement (jamais dans paint)
     if (resizeSettle > 0 && --resizeSettle == 0)
         rebuildCaches();
+    else if (resizeSettle == 0 && now - lastScaleCheckMs > 250.0)
+    {
+        lastScaleCheckMs = now;
+        const float sc = physicalScale();
+        if (std::abs (sc - cacheScale) > 0.01f)
+            rebuildCaches (sc);
+    }
+
+    // chien de garde : un redessin demandé n'arrive pas -> on relance le moteur de rendu et on redessine tout
+    if (repaintAskedMs > 0.0 && isShowing() && now - repaintAskedMs > 1500.0 && lastPaintMs < repaintAskedMs)
+    {
+        repaintAskedMs = 0.0;
+        lastPeer = nullptr;
+        useSoftwareRenderer();
+        repaint();
+    }
 
     // Un réglage qui bouge (souris, automation, MIDI) s'affiche 2,5 s puis la ligne revient au mode
     {
@@ -457,7 +500,7 @@ void HolyverbAudioProcessorEditor::timerCallback()
     if (std::abs (ledNow - drawnLed) > 0.003f)
     {
         drawnLed = ledNow;
-        repaint (scaled ({ ledPos.x - 60.0f, ledPos.y - 60.0f, 120.0f, 120.0f }));
+        askRepaint (scaled ({ ledPos.x - 60.0f, ledPos.y - 60.0f, 120.0f, 120.0f }));
     }
 
     const String text = tempAlpha > 0.0f ? tempStatus : String();
@@ -466,7 +509,7 @@ void HolyverbAudioProcessorEditor::timerCallback()
     {
         drawnTempAlpha = tempAlpha;
         drawnStatusText = text + "|" + base;
-        repaint (scaled (statusRect.expanded (4.0f)));
+        askRepaint (scaled (statusRect.expanded (4.0f)));
     }
 }
 
@@ -561,15 +604,15 @@ void HolyverbAudioProcessorEditor::drawLogo (Graphics& g)
 
 void HolyverbAudioProcessorEditor::paint (Graphics& g)
 {
+    lastPaintMs = Time::getMillisecondCounterHiRes();
+    repaintAskedMs = 0.0;
     g.fillAll (Colours::black);
-    const float pix = jlimit (1.0f, 4.0f, g.getInternalContext().getPhysicalPixelScaleFactor());
-    if (! bgScaled.isValid() || (resizeSettle == 0 && std::abs (pix - cacheScale) > 0.01f))
-        rebuildCaches (pix);
-
-    g.setImageResamplingQuality (bgScaled.getWidth() == background.getWidth() ? Graphics::highResamplingQuality
-                                                                               : Graphics::lowResamplingQuality);
-    if (bgScaled.isValid())
-        g.drawImage (bgScaled, getLocalBounds().toFloat());
+    // anti-gel : aucun rescale ici, on dessine le cache existant (ou l'original en attendant le timer)
+    const Image& bg = bgScaled.isValid() ? bgScaled : background;
+    g.setImageResamplingQuality (bg.getWidth() == background.getWidth() ? Graphics::highResamplingQuality
+                                                                         : Graphics::lowResamplingQuality);
+    if (bg.isValid())
+        g.drawImage (bg, getLocalBounds().toFloat());
 
     const float s = (float) getHeight() / (float) baseH;
     g.addTransform (AffineTransform::scale (s));
@@ -626,7 +669,7 @@ void HolyverbAudioProcessorEditor::showContextMenu()
     menu.addItem (51, "Tails (reverb rings out)",  true, raw (ParamID::trails) > 0.5f);
     menu.addItem (52, "Reset expression",          raw (ParamID::expression) > 0.001f);
     menu.addSeparator();
-    menu.addItem (999, "Holyverb v1.2.1 - STUDIO WIGA", false);
+    menu.addItem (999, "Holyverb v1.3.0 - STUDIO WIGA", false);
 
     menu.showMenuAsync (PopupMenu::Options().withTargetComponent (this),
         [safe = Component::SafePointer<HolyverbAudioProcessorEditor> (this)] (int r)

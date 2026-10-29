@@ -9,6 +9,8 @@ LED bleue dans sa bague chromée, animée par la reverb ; embases jack Studio Wi
 
 Fenêtre : 391 × 493 à l'ouverture (taille minimale, identique à Echoflex), agrandissable jusqu'à 150 %.
 
+v1.3.0 : anti-gel v2 (JUCE 8.0.15, caches refaits par le timer, chien de garde, aucun appel à l'hôte depuis le thread audio)
+
 ## Commandes
 
 | Commande | Rôle |

@@ -84,9 +84,9 @@ bool HolyverbAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts)
 void HolyverbAudioProcessor::prepareToPlay (double sampleRate, int)
 {
     holyverb::Params p;
-    p.decay = pDecay->load(); p.tone = pTone->load(); p.level = pLevel->load();
-    p.mode = ModeOrder::toEngine ((int) pMode->load()); p.preLong = pPre->load() > 0.5f;
-    p.expression = pExpr->load(); p.on = pOn->load() > 0.5f; p.spillover = pTrails->load() > 0.5f;
+    p.decay = pDecay->load (std::memory_order_relaxed); p.tone = pTone->load (std::memory_order_relaxed); p.level = pLevel->load (std::memory_order_relaxed);
+    p.mode = ModeOrder::toEngine ((int) pMode->load (std::memory_order_relaxed)); p.preLong = pPre->load (std::memory_order_relaxed) > 0.5f;
+    p.expression = pExpr->load (std::memory_order_relaxed); p.on = pOn->load (std::memory_order_relaxed) > 0.5f; p.spillover = pTrails->load (std::memory_order_relaxed) > 0.5f;
     engine.setParams (p);
     engine.prepare (sampleRate);
 }
@@ -104,14 +104,14 @@ void HolyverbAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
         buffer.copyFrom (1, 0, buffer, 0, 0, n);
 
     holyverb::Params p;
-    p.decay      = pDecay->load();
-    p.tone       = pTone->load();
-    p.level      = pLevel->load();
-    p.mode       = ModeOrder::toEngine (juce::roundToInt (pMode->load()));
-    p.preLong    = pPre->load() > 0.5f;
-    p.expression = pExpr->load();
-    p.on         = pOn->load() > 0.5f;
-    p.spillover  = pTrails->load() > 0.5f;
+    p.decay      = pDecay->load (std::memory_order_relaxed);
+    p.tone       = pTone->load (std::memory_order_relaxed);
+    p.level      = pLevel->load (std::memory_order_relaxed);
+    p.mode       = ModeOrder::toEngine (juce::roundToInt (pMode->load (std::memory_order_relaxed)));
+    p.preLong    = pPre->load (std::memory_order_relaxed) > 0.5f;
+    p.expression = pExpr->load (std::memory_order_relaxed);
+    p.on         = pOn->load (std::memory_order_relaxed) > 0.5f;
+    p.spillover  = pTrails->load (std::memory_order_relaxed) > 0.5f;
     engine.setParams (p);
 
     float* L = buffer.getWritePointer (0);
