@@ -109,3 +109,5 @@ Le plugin se trouve dans `build/Holyverb_artefacts/Release/VST3/Holyverb.vst3`
 ```bat
 g++ -O2 -std=c++17 tests/test_dsp.cpp -o test_dsp && test_dsp
 ```
+
+- v1.3.1 : menu de taille de fenêtre : « 60 % (default) », 75 %, 100 % (plus de taille en pixels)
