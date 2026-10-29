@@ -24,6 +24,87 @@ namespace
     };
 }
 
+//==============================================================================
+// MIDI Learn (v1.4)
+//==============================================================================
+const HolyverbAudioProcessor::LearnDef& HolyverbAudioProcessor::learnDef (int i)
+{
+    static const LearnDef defs[numLearn] =
+    {
+        { "decay",      "Decay",      -1, learnContinuous, 0 },
+        { "tone",       "Tone",       -1, learnContinuous, 0 },
+        { "level",      "Level",      -1, learnContinuous, 0 },
+        { "mode",       "Mode",       -1, learnSelector,   8 },   // CC réparti sur les 8 positions du sélecteur
+        { "predelay",   "Pre-delay",  -1, learnToggle,     2 },   // >= 64 : long
+        { "trails",     "Tails",      -1, learnToggle,     2 },   // >= 64 : tails
+        { "on",         "Footswitch", -1, learnFootswitch, 0 },
+        { "expression", "Expression", -1, learnContinuous, 0 },
+    };
+    return defs[juce::jlimit (0, numLearn - 1, i)];
+}
+
+void HolyverbAudioProcessor::resetMidiMap()
+{
+    for (int i = 0; i < numLearn; ++i) ccMap[i].store (learnDef (i).defaultCC);
+}
+
+void HolyverbAudioProcessor::setFromAudio (int i, float plain)
+{
+    pendingValue[i].store (plain, std::memory_order_relaxed);
+    pendingSet[i].store (true, std::memory_order_release);
+}
+
+void HolyverbAudioProcessor::timerCallback()
+{
+    for (int i = 0; i < numLearn; ++i)
+        if (pendingSet[i].exchange (false, std::memory_order_acquire))
+            if (auto* prm = apvts.getParameter (learnDef (i).id))
+                prm->setValueNotifyingHost (prm->convertTo0to1 (pendingValue[i].load (std::memory_order_relaxed)));
+    if (pendingPresetClear.exchange (false)) currentPreset = -1;
+}
+
+void HolyverbAudioProcessor::handleMidi (juce::MidiBuffer& midi)
+{
+    for (const auto meta : midi)
+    {
+        const auto m = meta.getMessage();
+        if (! m.isController()) continue;
+        const int cc = m.getControllerNumber(), v = m.getControllerValue();
+
+        // MIDI Learn : le premier CC reçu est affecté à la commande visée (il n'agit pas sur le son)
+        const int lt = learnTarget.load();
+        if (lt >= 0 && lt < numLearn && cc < 120)
+        {
+            for (int j = 0; j < numLearn; ++j)
+                if (j != lt && ccMap[j].load() == cc) ccMap[j].store (-1);   // numéro déjà pris : l'autre commande est désassignée
+            ccMap[lt].store (cc);
+            if (learnDef (lt).type == learnFootswitch) prevFsCC = v;
+            lastLearned.store (lt);
+            learnTarget.store (-1);
+            continue;
+        }
+
+        for (int j = 0; j < numLearn; ++j)
+        {
+            if (ccMap[j].load (std::memory_order_relaxed) != cc) continue;
+            const auto& d = learnDef (j);
+            if (d.type == learnContinuous)      setFromAudio (j, (float) v / 127.0f);
+            else if (d.type == learnToggle)     setFromAudio (j, v >= 64 ? 1.0f : 0.0f);
+            else if (d.type == learnSelector)   setFromAudio (j, (float) juce::jmin (d.positions - 1, v * d.positions / 128));
+            else
+            {
+                // footswitch : à accrochage (>= 64 = on) ou momentané (chaque appui bascule)
+                const float cur = pendingSet[j].load() ? pendingValue[j].load() : learnPtr[j]->load (std::memory_order_relaxed);
+                if (! midiFsMomentary.load())     setFromAudio (j, v >= 64 ? 1.0f : 0.0f);
+                else if (v >= 64 && prevFsCC < 64) setFromAudio (j, cur > 0.5f ? 0.0f : 1.0f);
+                prevFsCC = v;
+            }
+            if (d.type != learnFootswitch && j != 7) pendingPresetClear.store (true);
+        }
+    }
+    midi.clear();
+}
+
 HolyverbAudioProcessor::HolyverbAudioProcessor()
     : AudioProcessor (BusesProperties()
                         .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
@@ -38,6 +119,15 @@ HolyverbAudioProcessor::HolyverbAudioProcessor()
     pExpr   = apvts.getRawParameterValue (ParamID::expression);
     pOn     = apvts.getRawParameterValue (ParamID::on);
     pTrails = apvts.getRawParameterValue (ParamID::trails);
+
+    for (int i = 0; i < numLearn; ++i)
+    {
+        pendingValue[i].store (0.0f);
+        pendingSet[i].store (false);
+        learnPtr[i] = apvts.getRawParameterValue (learnDef (i).id);
+    }
+    resetMidiMap();
+    startTimerHz (60);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout HolyverbAudioProcessor::createLayout()
@@ -91,9 +181,10 @@ void HolyverbAudioProcessor::prepareToPlay (double sampleRate, int)
     engine.prepare (sampleRate);
 }
 
-void HolyverbAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void HolyverbAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
+    handleMidi (midi);
 
     const int numIn  = getTotalNumInputChannels();
     const int numOut = getTotalNumOutputChannels();
@@ -216,6 +307,9 @@ void HolyverbAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
     state.setProperty ("currentPreset", currentPreset.load(), nullptr);
+    for (int i = 0; i < numLearn; ++i)
+        state.setProperty (juce::String ("cc_") + learnDef (i).id, ccMap[i].load(), nullptr);
+    state.setProperty ("midiFsMomentary", midiFsMomentary.load(), nullptr);
     std::unique_ptr<juce::XmlElement> xml (state.createXml());
     copyXmlToBinary (*xml, destData);
 }
@@ -227,6 +321,10 @@ void HolyverbAudioProcessor::setStateInformation (const void* data, int sizeInBy
     {
         auto tree = juce::ValueTree::fromXml (*xml);
         currentPreset = (int) tree.getProperty ("currentPreset", -1);
+        // assignations MIDI Learn (projet antérieur à la v1.4 : aucune assignation)
+        for (int i = 0; i < numLearn; ++i)
+            ccMap[i].store (juce::jlimit (-1, 127, (int) tree.getProperty (juce::String ("cc_") + learnDef (i).id, learnDef (i).defaultCC)));
+        midiFsMomentary.store ((bool) tree.getProperty ("midiFsMomentary", false));
         apvts.replaceState (tree);
     }
 }

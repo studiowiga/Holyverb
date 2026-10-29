@@ -1,6 +1,8 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <atomic>
+#include <cstring>
 #include "HolyverbDSP.h"
 
 namespace ParamID
@@ -43,7 +45,8 @@ struct HolyverbPreset
     bool  trails;
 };
 
-class HolyverbAudioProcessor : public juce::AudioProcessor
+class HolyverbAudioProcessor : public juce::AudioProcessor,
+                               private juce::Timer
 {
 public:
     HolyverbAudioProcessor();
@@ -58,7 +61,7 @@ public:
     bool hasEditor() const override { return true; }
 
     const juce::String getName() const override { return "Holyverb"; }
-    bool acceptsMidi() const override  { return false; }
+    bool acceptsMidi() const override  { return true; }      // v1.4 : MIDI Learn
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 20.0; }
@@ -93,8 +96,30 @@ public:
     // Pour l'animation de la LED (lu par l'éditeur)
     std::atomic<float> ledLevel { 0.0f };
 
+    // v1.4 MIDI Learn : toutes les commandes de la façade (+ Expression, paramètre sans bouton)
+    // aucune assignation par défaut (la pédale n'acceptait pas le MIDI avant la v1.4)
+    enum LearnType { learnContinuous, learnToggle, learnSelector, learnFootswitch };
+    struct LearnDef { const char* id; const char* name; int defaultCC; int type; int positions; };
+    static constexpr int numLearn = 8;
+    static const LearnDef& learnDef (int i);
+    std::atomic<int> ccMap[numLearn];            // numéro de CC de chaque commande, -1 = non assigné
+    std::atomic<int> learnTarget { -1 };         // commande en attente d'un CC (-1 = pas de learn)
+    std::atomic<int> lastLearned { -1 };         // dernière commande apprise (lue et remise à -1 par la fenêtre)
+    std::atomic<bool> midiFsMomentary { false }; // footswitch MIDI : false = à accrochage (>= 64 = on), true = chaque appui bascule
+    void resetMidiMap();
+
 private:
     void setParam (const juce::String& id, float plain);
+
+    // anti-gel : le MIDI (thread audio) met les valeurs en file, ce timer (thread de messages) les transmet à l'hôte
+    void handleMidi (juce::MidiBuffer& midi);
+    void setFromAudio (int learnIdx, float plain);
+    void timerCallback() override;
+    std::atomic<float> pendingValue[numLearn];
+    std::atomic<bool>  pendingSet[numLearn];
+    std::atomic<bool>  pendingPresetClear { false };
+    std::atomic<float>* learnPtr[numLearn] {};   // valeurs courantes des paramètres (pointeurs mis en cache)
+    int prevFsCC = 0;
 
     holyverb::Engine engine;
 

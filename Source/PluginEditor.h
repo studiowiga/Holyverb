@@ -59,11 +59,11 @@ private:
 //==============================================================================
 struct RightClickForwarder : public juce::MouseListener
 {
-    std::function<void()> callback;
+    std::function<void (juce::Component*)> callback;    // composant cliqué : menu MIDI Learn de cette commande
     void mouseDown (const juce::MouseEvent& e) override
     {
         if (e.mods.isPopupMenu() && callback)
-            callback();
+            callback (e.eventComponent);
     }
 };
 
@@ -88,7 +88,9 @@ public:
 private:
     void timerCallback() override;
     void useSoftwareRenderer();
-    void showContextMenu();
+    void showContextMenu (int learnIdx = -1);     // learnIdx >= 0 : clic droit sur une commande (MIDI Learn en tête du menu)
+    void addMidiMenu (juce::PopupMenu& menu, int learnIdx);
+    void handleMidiMenu (int r);
     void setScaledHeight (int h);
     void showStatus (const juce::String& text);
     void drawLed (juce::Graphics&);
@@ -131,6 +133,7 @@ private:
     float tempAlpha = 0.0f, drawnTempAlpha = -1.0f;
     float lastValues[7] { -1, -1, -1, -1, -1, -1, -1 };
     int lastPresetCounter = 0;
+    double learnMsgUntil = 0.0;                    // message MIDI Learn affiché (prioritaire sur les valeurs)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HolyverbAudioProcessorEditor)
 };

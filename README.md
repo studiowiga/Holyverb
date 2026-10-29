@@ -111,3 +111,4 @@ g++ -O2 -std=c++17 tests/test_dsp.cpp -o test_dsp && test_dsp
 ```
 
 - v1.3.1 : menu de taille de fenêtre : « 60 % (default) », 75 %, 100 % (plus de taille en pixels)
+- v1.4.0 : MIDI Learn au clic droit sur chaque commande (Clear MIDI, assignations sauvegardées avec le projet)

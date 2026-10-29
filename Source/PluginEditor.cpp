@@ -225,7 +225,18 @@ HolyverbAudioProcessorEditor::HolyverbAudioProcessorEditor (HolyverbAudioProcess
         statusFont = Font (FontOptions (tf).withHeight (100.0f * statusCap / cap100).withKerningFactor (0.063f));
     }
 
-    rightClickFwd.callback = [this] { showContextMenu(); };
+    rightClickFwd.callback = [this] (Component* c)
+    {
+        int idx = -1;
+        if      (c == &decay)       idx = 0;
+        else if (c == &tone)        idx = 1;
+        else if (c == &level)       idx = 2;
+        else if (c == &mode)        idx = 3;
+        else if (c == &preSwitch)   idx = 4;
+        else if (c == &tailsSwitch) idx = 5;
+        else if (c == &footswitch)  idx = 6;
+        showContextMenu (idx);
+    };
 
     auto setupKnob = [this] (Slider& s, StripKnobLookAndFeel& lnf)
     {
@@ -462,6 +473,7 @@ void HolyverbAudioProcessorEditor::timerCallback()
             if (std::abs (v - lastValues[i]) > 1.0e-4f)
             {
                 lastValues[i] = v;
+                if (now < learnMsgUntil || proc.learnTarget.load() >= 0) continue;   // le message MIDI Learn reste affiché
                 if (i == 3)       showStatus ("MODE " + String (ModeOrder::name (roundToInt (v))));
                 else if (i == 5)  showStatus (v > 0.5f ? "TAILS ON" : "TAILS CUT");
                 else              showStatus (String (names[i]) + " " + paramText (ids[i]));
@@ -480,6 +492,20 @@ void HolyverbAudioProcessorEditor::timerCallback()
         for (auto* s : { &decay, &tone, &level, &mode })
             if (s->isMouseButtonDown())
                 statusUntil = jmax (statusUntil, now + 2500.0);
+
+        // MIDI Learn : attente puis confirmation 2 s dans la ligne d'état
+        const int learned = proc.lastLearned.exchange (-1);
+        const int lt = proc.learnTarget.load();
+        if (learned >= 0)
+        {
+            tempStatus = String (HolyverbAudioProcessor::learnDef (learned).name) + " = CC " + String (proc.ccMap[learned].load());
+            learnMsgUntil = statusUntil = now + 2000.0;
+        }
+        else if (lt >= 0)
+        {
+            tempStatus = "MIDI LEARN: move a control for " + String (HolyverbAudioProcessor::learnDef (lt).name);
+            learnMsgUntil = statusUntil = now + 300.0;
+        }
 
         const float target = now < statusUntil ? 1.0f : 0.0f;
         tempAlpha += (target - tempAlpha) * (target > tempAlpha ? 0.55f : 0.15f);
@@ -580,6 +606,9 @@ void HolyverbAudioProcessorEditor::drawStatus (Graphics& g)
     {
         if (alpha <= 0.0f || t.isEmpty())
             return;
+        // messages MIDI Learn plus longs : même police, réduite si elle dépasse la ligne
+        const float tw = GlyphArrangement::getStringWidth (statusFont, t);
+        g.setFont (tw > statusRect.getWidth() ? statusFont.withHeight (statusFont.getHeight() * statusRect.getWidth() / tw) : statusFont);
         g.setColour (Colours::black.withAlpha (0.35f * alpha));        // légère ombre imprimée
         g.drawSingleLineText (t, roundToInt (statusCenterX + 0.6f), roundToInt (statusBaseline + 0.9f), Justification::horizontallyCentred);
         g.setColour (statusInk.withAlpha (alpha));
@@ -629,10 +658,37 @@ void HolyverbAudioProcessorEditor::mouseDown (const MouseEvent& e)
         showContextMenu();
 }
 
-void HolyverbAudioProcessorEditor::showContextMenu()
+void HolyverbAudioProcessorEditor::addMidiMenu (PopupMenu& menu, int learnIdx)
+{
+    const int lt = proc.learnTarget.load();
+    // clic droit sur une commande : MIDI Learn de cette commande en tête du menu
+    if (learnIdx >= 0)
+    {
+        const int cc = proc.ccMap[learnIdx].load();
+        const String name = HolyverbAudioProcessor::learnDef (learnIdx).name;
+        menu.addItem (1000 + learnIdx, "MIDI Learn: " + name + " (" + (cc >= 0 ? "CC " + String (cc) : String ("none")) + ")", true, lt == learnIdx);
+        menu.addItem (1100 + learnIdx, "Clear MIDI: " + name, cc >= 0);
+        if (lt >= 0) menu.addItem (1200, "Cancel MIDI learn");
+        menu.addSeparator();
+    }
+}
+
+void HolyverbAudioProcessorEditor::handleMidiMenu (int r)
+{
+    if (r >= 1000 && r < 1000 + HolyverbAudioProcessor::numLearn)
+        proc.learnTarget.store (proc.learnTarget.load() == r - 1000 ? -1 : r - 1000);   // re-cliquer annule
+    else if (r >= 1100 && r < 1100 + HolyverbAudioProcessor::numLearn) proc.ccMap[r - 1100].store (-1);
+    else if (r == 1200) proc.learnTarget.store (-1);
+    else if (r == 1201) { proc.learnTarget.store (-1); proc.resetMidiMap(); }
+    else if (r == 1202) proc.midiFsMomentary.store (false);
+    else if (r == 1203) proc.midiFsMomentary.store (true);
+}
+
+void HolyverbAudioProcessorEditor::showContextMenu (int learnIdx)
 {
     auto raw = [this] (const String& id) { return proc.apvts.getRawParameterValue (id)->load(); };
     PopupMenu menu;
+    addMidiMenu (menu, learnIdx);
 
     PopupMenu sizes;
     const int defaultW = roundToInt ((float) defaultH * (float) baseW / (float) baseH);
@@ -669,7 +725,24 @@ void HolyverbAudioProcessorEditor::showContextMenu()
     menu.addItem (51, "Tails (reverb rings out)",  true, raw (ParamID::trails) > 0.5f);
     menu.addItem (52, "Reset expression",          raw (ParamID::expression) > 0.001f);
     menu.addSeparator();
-    menu.addItem (999, "Holyverb v1.3.0 - STUDIO WIGA", false);
+
+    PopupMenu midi;
+    for (int i = 0; i < HolyverbAudioProcessor::numLearn; ++i)
+    {
+        const int cc = proc.ccMap[i].load();
+        midi.addItem (1000 + i, "Learn: " + String (HolyverbAudioProcessor::learnDef (i).name)
+                                 + " (" + (cc >= 0 ? "CC " + String (cc) : String ("none")) + ")",
+                      true, proc.learnTarget.load() == i);
+    }
+    midi.addSeparator();
+    if (proc.learnTarget.load() >= 0) midi.addItem (1200, "Cancel MIDI learn");
+    midi.addItem (1201, "Reset MIDI to defaults (no CC assigned)");
+    midi.addSeparator();
+    midi.addItem (1202, "MIDI footswitch latching (127 = on / 0 = off)", true, ! proc.midiFsMomentary.load());
+    midi.addItem (1203, "MIDI footswitch momentary (toggle each press)", true, proc.midiFsMomentary.load());
+    menu.addSubMenu ("MIDI", midi);
+    menu.addSeparator();
+    menu.addItem (999, "Holyverb v" + String (JucePlugin_VersionString) + " - STUDIO WIGA", false);
 
     menu.showMenuAsync (PopupMenu::Options().withTargetComponent (this),
         [safe = Component::SafePointer<HolyverbAudioProcessorEditor> (this)] (int r)
@@ -698,5 +771,6 @@ void HolyverbAudioProcessorEditor::showContextMenu()
             else if (r > 200 && r < 300)  ed.proc.loadUserPreset (r - 200);
             else if (r > 300 && r < 400)  ed.proc.saveUserPreset (r - 300);
             else if (r >= 400 && r < 408) { setP (ParamID::mode, (float) (r - 400)); ed.proc.currentPreset = -1; }
+            else if (r >= 1000) ed.handleMidiMenu (r);
         });
 }
